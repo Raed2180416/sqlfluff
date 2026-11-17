@@ -19,6 +19,7 @@ from tqdm import tqdm
 
 from sqlfluff.core.config import progress_bar_configuration
 from sqlfluff.core.errors import SQLParseError
+from sqlfluff.core.plugin.host import is_main_process
 
 if TYPE_CHECKING:  # pragma: no cover
     from sqlfluff.core.config import FluffConfig
@@ -301,20 +302,26 @@ class ParseContext:
                 the file.
         """
         assert not self._tqdm, "Attempted to re-initialise progressbar."
-        self._tqdm = tqdm(
-            # Progress is character by character in the *templated* file.
-            total=last_char,
-            desc="parsing",
-            miniters=1,
-            mininterval=0.2,
-            disable=progress_bar_configuration.disable_progress_bar,
-            leave=False,
-        )
+        # A worker process draws no progress bar. Constructing one there still
+        # builds a multiprocessing lock for tqdm's own coordination, whatever
+        # the `disable` setting, which is a resource the worker then has to
+        # clean up on the way out.
+        if is_main_process.get():
+            self._tqdm = tqdm(
+                # Progress is character by character in the *templated* file.
+                total=last_char,
+                desc="parsing",
+                miniters=1,
+                mininterval=0.2,
+                disable=progress_bar_configuration.disable_progress_bar,
+                leave=False,
+            )
 
         try:
             yield self
         finally:
-            self._tqdm.close()
+            if self._tqdm:
+                self._tqdm.close()
 
     def update_progress(self, char_idx: int) -> None:
         """Update the progress bar if configured.

@@ -853,18 +853,22 @@ def test__linter__lint_paths_closes_runner_iterator_on_early_break(monkeypatch):
     assert closable_iterator.closed
 
 
-def test__parallel_runner__pool_join_called_on_cleanup(monkeypatch):
-    """Ensure ParallelRunner.run() calls pool.terminate() and pool.join().
+def test__parallel_runner__pool_closed_on_cleanup(monkeypatch):
+    """Ensure ParallelRunner.run() closes a pool which finished its work.
 
-    Without pool.join(), worker processes may still be alive when Python's
-    resource_tracker runs at shutdown, causing "leaked semaphore" warnings
-    from the named POSIX semaphores used by the pool's internal queues.
+    A pool which has yielded every result is closed and joined rather than
+    terminated: ``terminate()`` sends SIGTERM, so each worker dies without
+    running the cleanup it would otherwise do on the way out, and anything it
+    registered with the resource tracker stays registered. Without the join,
+    worker processes may still be alive when Python's resource_tracker runs at
+    shutdown. Either way the warning surfaces as "leaked semaphore objects".
     """
 
     class TrackingPool:
-        """Fake pool that records terminate/join calls."""
+        """Fake pool that records close/terminate/join calls."""
 
         def __init__(self):
+            self.closed = False
             self.terminated = False
             self.joined = False
 
@@ -873,6 +877,9 @@ def test__parallel_runner__pool_join_called_on_cleanup(monkeypatch):
 
         def imap(self, func, iterable):
             yield from ()
+
+        def close(self):
+            self.closed = True
 
         def terminate(self):
             self.terminated = True
@@ -893,7 +900,10 @@ def test__parallel_runner__pool_join_called_on_cleanup(monkeypatch):
     # Consume the generator to trigger the finally block.
     list(runner.MultiThreadRunner(lntr, config, processes=1).run([], fix=False))
 
-    assert tracking_pool.terminated, "pool.terminate() was not called"
+    assert tracking_pool.closed, "pool.close() was not called"
+    assert not tracking_pool.terminated, (
+        "pool.terminate() was called on a finished pool"
+    )
     assert tracking_pool.joined, "pool.join() was not called"
 
 

@@ -1,5 +1,6 @@
 """Tests for WarmWorkerRunner and the warm worker protocol."""
 
+import atexit
 import os
 import pickle
 import signal
@@ -638,6 +639,48 @@ class TestTerminatePool:
         # Should not raise — errors are swallowed.
         WarmWorkerRunner._terminate_pool(t)
         assert t._warm_pool is None
+
+
+class TestReleaseAtExit:
+    """The persistent pool is released before the interpreter exits."""
+
+    def test_pool_and_shm_released_by_registered_hook(self, tmp_path, monkeypatch):
+        """A jinja run keeps its pool, and registers the hook which releases it.
+
+        The pool and its shared memory block are kept alive after a run so the
+        next one in this process can reuse them, so the release has to happen
+        at exit. If it does not, the block is still registered when the
+        resource tracker runs its own exit hook and is reported as leaked.
+        """
+        registered = []
+        monkeypatch.setattr(
+            atexit,
+            "register",
+            lambda func, *args, **kwargs: registered.append((func, args)),
+        )
+        (tmp_path / "a.sql").write_text("SELECT 1\n")
+        (tmp_path / "b.sql").write_text("SELECT 2\n")
+        config = FluffConfig(overrides={"dialect": "ansi"})
+        lntr = Linter(config=config)
+        try:
+            result = lntr.lint_paths((str(tmp_path),), processes=2, retain_files=True)
+            assert sum(p.stats()["files"] for p in result.paths) == 2
+            assert lntr.templater._warm_pool is not None
+            assert lntr.templater._warm_shm is not None
+
+            # Registered once, however many runs reused the pool.
+            releases = [
+                args
+                for func, args in registered
+                if func is WarmWorkerRunner._terminate_pool
+            ]
+            assert releases == [(lntr.templater,)]
+
+            WarmWorkerRunner._terminate_pool(*releases[0])
+            assert lntr.templater._warm_pool is None
+            assert lntr.templater._warm_shm is None
+        finally:
+            WarmWorkerRunner._terminate_pool(lntr.templater)
 
 
 # --- _warm_worker_log ---

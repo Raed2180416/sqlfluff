@@ -41,6 +41,7 @@ from sqlfluff.core.linter.linting_result import LintingResult
 from sqlfluff.core.linter.patch import generate_source_patches, merge_source_patches
 from sqlfluff.core.parser import Lexer, Parser
 from sqlfluff.core.parser.segments.base import BaseSegment, SourceFix
+from sqlfluff.core.plugin.host import is_main_process
 from sqlfluff.core.rules import BaseRule, RulePack, get_ruleset
 from sqlfluff.core.rules.fix import LintFix
 from sqlfluff.core.rules.noqa import IgnoreMask
@@ -554,14 +555,22 @@ class Linter:
                     # In order to compute initial_linting_errors correctly, need
                     # to run all rules on the first loop of the main phase.
                     rules_this_phase = rule_pack.rules
-                progress_bar_crawler = tqdm(
-                    rules_this_phase,
-                    desc="lint by rules",
-                    leave=False,
-                    disable=progress_bar_configuration.disable_progress_bar,
+                # Only the main process draws a progress bar. A worker in a
+                # parallel run would build one per file it lints, and tqdm
+                # takes a multiprocessing lock for its own coordination as
+                # soon as it is constructed, whatever the `disable` setting.
+                progress_bar_crawler = (
+                    tqdm(
+                        rules_this_phase,
+                        desc="lint by rules",
+                        leave=False,
+                        disable=progress_bar_configuration.disable_progress_bar,
+                    )
+                    if is_main_process.get()
+                    else None
                 )
 
-                for crawler in progress_bar_crawler:
+                for crawler in rules_this_phase:
                     # Performance: After first loop pass, skip rules that don't
                     # do fixes. Any results returned won't be seen by the user
                     # anyway (linting errors ADDED by rules changing SQL, are
@@ -574,7 +583,8 @@ class Linter:
                     ):
                         continue
 
-                    progress_bar_crawler.set_description(f"rule {crawler.code}")
+                    if progress_bar_crawler is not None:
+                        progress_bar_crawler.set_description(f"rule {crawler.code}")
                     t0 = time.monotonic()
 
                     # fixes should be a dict {} with keys edit, delete, create

@@ -8,6 +8,7 @@ Implements various runner types for SQLFluff:
   - Multithread (used only by automated tests)
 """
 
+import atexit
 import bdb
 import functools
 import logging
@@ -376,6 +377,7 @@ class ParallelRunner(BaseRunner):
                 self._init_worker, self._root_config_for_workers(), self.retain_files
             ),
         )
+        exhausted = False
         try:
             for lint_result in self._map(
                 pool,
@@ -385,6 +387,7 @@ class ParallelRunner(BaseRunner):
                 handled = self._handle_result(lint_result, fix)
                 if handled is not None:
                     yield handled
+            exhausted = True
         except KeyboardInterrupt:  # pragma: no cover
             # On keyboard interrupt (Ctrl-C), terminate the workers.
             # Notify the user we've received the signal and are cleaning up,
@@ -392,7 +395,15 @@ class ParallelRunner(BaseRunner):
             print("Received keyboard interrupt. Cleaning up and shutting down...")
         finally:
             try:
-                pool.terminate()
+                if exhausted:
+                    # Every result has been yielded, so let the workers exit
+                    # normally rather than sending them SIGTERM: a terminated
+                    # worker runs none of its own cleanup, so whatever it
+                    # registered with the resource tracker stays registered and
+                    # is reported as leaked when the interpreter exits.
+                    pool.close()
+                else:
+                    pool.terminate()
             finally:
                 pool.join()
 
@@ -668,6 +679,15 @@ class WarmWorkerRunner(MultiProcessRunner):
             templater._warm_pool = pool
             templater._warm_pool_processes = self.processes
             pool_is_new = True
+
+            # The pool and the shared memory block it reads from are kept
+            # alive for the next run in this process, so nothing releases
+            # them when a run succeeds. Release them from an `atexit` hook,
+            # which runs before the resource tracker's own exit hook; by then
+            # the block would still be registered, and reported as leaked.
+            if not getattr(templater, "_warm_exit_hook", False):
+                atexit.register(self._terminate_pool, templater)
+                templater._warm_exit_hook = True
 
             t_pool = time.perf_counter()
             _warm_worker_log(
