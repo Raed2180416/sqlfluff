@@ -273,10 +273,12 @@ class IgnoreMask:
         last_ignore: Optional[NoQaDirective] = None
         for idx, ignore_rule in enumerate(ignore_rules):
             if ignore_rule.line_no > line_no:
-                # Peak at the next rule to see if it's a matching disable
-                # and if it is, then mark it as used.
-                if ignore_rule.action == "enable":
-                    # Mark as used
+                # Peek at the next directive. If it is an enable which closes
+                # the disable currently in effect, then it is what ends this
+                # violation's suppression, so mark it as used too. An enable
+                # with no disable before it closes nothing, and is left
+                # unused so that the "unused noqa" warning reports it.
+                if ignore_rule.action == "enable" and last_ignore:
                     ignore_rule.used = True
                 break
 

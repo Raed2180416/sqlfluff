@@ -450,6 +450,14 @@ def test_from_source_with_dialect_no_inline_comment_matcher():
             [],
             [0],  # Matched indirectly
         ],
+        [
+            [
+                dict(comment="noqa: enable=all", line_no=2),
+            ],
+            [DummyLintError(1)],
+            [0],
+            [],  # The enable closes no disable, so it is unused.
+        ],
     ],
     ids=[
         "1_violation_no_ignore",
@@ -472,6 +480,7 @@ def test_from_source_with_dialect_no_inline_comment_matcher():
         "2_violations_comment_inline_ignore",
         "1_violations_comment_inline_glob_ignore_unmatch",
         "1_violations_comment_inline_glob_ignore_match",
+        "1_violation_line_1_ignore_enable_2_without_disable",
     ],
 )
 def test_linted_file_ignore_masked_violations(
