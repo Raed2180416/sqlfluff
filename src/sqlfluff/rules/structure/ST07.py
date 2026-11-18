@@ -93,6 +93,16 @@ class Rule_ST07(BaseRule):
             description=description,
         )
 
+        # On an ASOF join the USING list is not a list of equality keys: the
+        # last key carries the inequality which selects the matching row, so
+        # DuckDB reads `using (symbol, ts)` as `symbol = symbol AND
+        # t.ts >= p.ts`. An ON condition built from equality alone is a
+        # different join -- DuckDB rejects it as an ASOF join with no
+        # inequality, and Snowflake requires a MATCH_CONDITION which the
+        # rewrite cannot produce -- so flag the clause but leave it unfixable.
+        if len(segment.children(sp.is_keyword("asof")).first()) > 0:
+            return unfixable_result
+
         tables_in_join = parent_stack.last().children(
             sp.is_type("join_clause", "from_expression_element")
         )

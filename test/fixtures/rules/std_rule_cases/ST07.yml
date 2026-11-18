@@ -263,3 +263,55 @@ test_fail_qualified_wildcard_still_fixed:
   fix_str: |
     select a.*, b.* from a
     inner join b ON a.id = b.id
+
+test_unfixable_asof_join_using:
+  # The last key of a USING list on an ASOF join carries the inequality which
+  # picks the matching row, so `using (symbol, ts)` is not two equality keys.
+  # An ON condition built from equality alone is a different join, and DuckDB
+  # refuses it as an ASOF join with no inequality.
+  fail_str: |
+    select t.symbol, p.price
+    from trades as t
+    asof join prices as p using (symbol, ts)
+  fix_str: |
+    select t.symbol, p.price
+    from trades as t
+    asof join prices as p using (symbol, ts)
+  violations_after_fix:
+    - description: Found USING statement. Expected only ON statements.
+      name: structure.using
+      warning: false
+      fixes: []
+      start_line_no: 3
+      start_line_pos: 23
+      start_file_pos: 64
+      end_line_no: 3
+      end_line_pos: 28
+      end_file_pos: 69
+  configs:
+    core:
+      dialect: duckdb
+
+test_unfixable_asof_join_using_snowflake:
+  # Same clause in Snowflake, where an ASOF join needs a MATCH_CONDITION that
+  # the USING to ON rewrite cannot produce.
+  fail_str: |
+    select a.x, b.y
+    from a asof join b using (id)
+  fix_str: |
+    select a.x, b.y
+    from a asof join b using (id)
+  violations_after_fix:
+    - description: Found USING statement. Expected only ON statements.
+      name: structure.using
+      warning: false
+      fixes: []
+      start_line_no: 2
+      start_line_pos: 20
+      start_file_pos: 35
+      end_line_no: 2
+      end_line_pos: 25
+      end_file_pos: 40
+  configs:
+    core:
+      dialect: snowflake
